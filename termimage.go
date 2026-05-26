@@ -107,6 +107,6 @@ func detectTermPixels() (int, int) {
 	if err != nil {
 		return 1920, 1080
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return termPixels(f)
 }

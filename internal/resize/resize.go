@@ -31,10 +31,3 @@ func Fit(src *image.NRGBA, maxW, maxH int) *image.NRGBA {
 	draw.BiLinear.Scale(dst, dst.Bounds(), src, b, draw.Src, nil)
 	return dst
 }
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}

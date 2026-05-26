@@ -11,12 +11,14 @@
 package sandbox
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"image"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 )
 
 const workerEnv = "TERMIMAGE_WORKER"
@@ -44,12 +46,17 @@ func MaybeRunWorker() {
 // Decode spawns a sandboxed worker subprocess to decode the image at path.
 // Returns an NRGBA image whose pixels were produced inside the sandbox.
 func Decode(path string) (*image.NRGBA, error) {
+	return DecodeContext(context.Background(), path)
+}
+
+// DecodeContext is Decode with caller-supplied context for cancellation.
+func DecodeContext(ctx context.Context, path string) (*image.NRGBA, error) {
 	self, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: resolve self: %w", err)
 	}
 
-	cmd := exec.Command(self)
+	cmd := exec.CommandContext(ctx, self)
 	cmd.Env = append(os.Environ(), workerEnv+"=1", "TERMIMAGE_WORKER_PATH="+path)
 	cmd.Stderr = os.Stderr
 
@@ -79,12 +86,14 @@ func runWorker() error {
 		return fmt.Errorf("TERMIMAGE_WORKER_PATH not set")
 	}
 
+	clean := filepath.Clean(path)
+
 	// Apply OS restrictions BEFORE touching the file.
-	if err := apply(path); err != nil {
+	if err := apply(clean); err != nil {
 		return fmt.Errorf("sandbox apply: %w", err)
 	}
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(clean) //#nosec G304,G703 -- worker reads attacker-controlled path by design; Landlock restricts access to this single file
 	if err != nil {
 		return fmt.Errorf("read: %w", err)
 	}

@@ -54,6 +54,8 @@ func (p Protocol) String() string {
 		return "kitty"
 	case Sixel:
 		return "sixel"
+	case HalfBlock:
+		return "halfblock"
 	default:
 		return "halfblock"
 	}

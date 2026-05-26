@@ -1,6 +1,7 @@
 package render
 
 import (
+	"bufio"
 	"fmt"
 	"image"
 	"image/color"
@@ -12,6 +13,7 @@ import (
 // foreground (top) and background (bottom) ANSI 24-bit color.
 // Works on any terminal with UTF-8 and truecolor support.
 func HalfBlock(w io.Writer, img image.Image) error {
+	bw := bufio.NewWriter(w)
 	b := img.Bounds()
 	height := b.Dy()
 
@@ -24,20 +26,19 @@ func HalfBlock(w io.Writer, img image.Image) error {
 				bot = toRGB(img.At(x, y+1))
 			}
 
-			// Foreground = top pixel (▀ upper half), background = bottom pixel.
-			fmt.Fprintf(w, "\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm▀",
+			if _, err := fmt.Fprintf(bw, "\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm▀",
 				top[0], top[1], top[2],
 				bot[0], bot[1], bot[2],
-			)
+			); err != nil {
+				return err
+			}
 		}
-		fmt.Fprintf(w, "\x1b[0m\n")
+		if _, err := bw.WriteString("\x1b[0m\n"); err != nil {
+			return err
+		}
 	}
 
-	if height%2 != 0 {
-		// Already handled: last row processed above with bot = black.
-	}
-
-	return nil
+	return bw.Flush()
 }
 
 func toRGB(c color.Color) [3]uint8 {

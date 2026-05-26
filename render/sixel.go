@@ -1,6 +1,7 @@
 package render
 
 import (
+	"bufio"
 	"fmt"
 	"image"
 	"io"
@@ -9,6 +10,7 @@ import (
 // Sixel encodes img as a DEC Sixel sequence and writes it to w.
 // Colors are quantized to 256 using a fast median-cut algorithm.
 func Sixel(w io.Writer, img image.Image) error {
+	bw := bufio.NewWriter(w)
 	b := img.Bounds()
 	width, height := b.Dx(), b.Dy()
 
@@ -16,7 +18,7 @@ func Sixel(w io.Writer, img image.Image) error {
 	palette := medianCut(img, 256)
 
 	// Sixel header.
-	if _, err := fmt.Fprintf(w, "\x1bPq"); err != nil {
+	if _, err := bw.WriteString("\x1bPq"); err != nil {
 		return err
 	}
 
@@ -24,16 +26,17 @@ func Sixel(w io.Writer, img image.Image) error {
 	for i, c := range palette {
 		r, g, bl, _ := c.RGBA()
 		// Sixel color values are 0-100 (percentage).
-		fmt.Fprintf(w, "#%d;2;%d;%d;%d", i,
+		if _, err := fmt.Fprintf(bw, "#%d;2;%d;%d;%d", i,
 			int(r>>8)*100/255,
 			int(g>>8)*100/255,
 			int(bl>>8)*100/255,
-		)
+		); err != nil {
+			return err
+		}
 	}
 
 	// Each sixel row covers 6 pixel rows. Build one color band at a time.
 	for bandY := 0; bandY < height; bandY += 6 {
-		// For each color, build a sixel band string.
 		bands := make([][]byte, len(palette))
 		for i := range bands {
 			bands[i] = make([]byte, width)
@@ -51,23 +54,31 @@ func Sixel(w io.Writer, img image.Image) error {
 			}
 		}
 
-		// Emit each color's band (skip all-zero bands).
 		for i, band := range bands {
 			if allZero(band) {
 				continue
 			}
-			fmt.Fprintf(w, "#%d", i)
-			for _, v := range band {
-				w.Write([]byte{v + 63})
+			if _, err := fmt.Fprintf(bw, "#%d", i); err != nil {
+				return err
 			}
-			w.Write([]byte("$")) // carriage return within sixel row
+			for _, v := range band {
+				if err := bw.WriteByte(v + 63); err != nil {
+					return err
+				}
+			}
+			if err := bw.WriteByte('$'); err != nil { // carriage return within sixel row
+				return err
+			}
 		}
-		w.Write([]byte("-")) // next sixel row
+		if err := bw.WriteByte('-'); err != nil { // next sixel row
+			return err
+		}
 	}
 
-	// Sixel trailer.
-	_, err := fmt.Fprintf(w, "\x1b\\\n")
-	return err
+	if _, err := bw.WriteString("\x1b\\\n"); err != nil {
+		return err
+	}
+	return bw.Flush()
 }
 
 func allZero(b []byte) bool {
