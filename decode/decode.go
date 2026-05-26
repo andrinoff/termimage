@@ -4,6 +4,7 @@ package decode
 
 /*
 #cgo CFLAGS: -O3
+#cgo LDFLAGS: -lm
 #include "stb_image.h"
 #include <stdlib.h>
 
