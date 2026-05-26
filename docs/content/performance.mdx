@@ -1,0 +1,44 @@
+---
+title: Performance
+---
+
+# Performance
+
+## Decode
+
+stb_image compiled with `-O3` is the fastest pure-software decoder for most
+formats. Rough comparison on a 4K JPEG (3840×2160):
+
+| Decoder | Time |
+|---------|------|
+| Go `image/jpeg` | ~180 ms |
+| stb_image (CGo, `-O3`) | ~35 ms |
+| libjpeg-turbo (SIMD) | ~12 ms |
+
+stb_image does not use SIMD for JPEG. For maximum throughput on JPEG-heavy
+workloads, a libjpeg-turbo binding would be faster, at the cost of a system
+dependency.
+
+> [!TIP]
+> For very large images, decode time dominates. Pass `MaxWidth` and `MaxHeight`
+> so the resize step discards pixels early rather than decoding a 50 MP image
+> to display it at 800 px wide.
+
+## Resize
+
+`golang.org/x/image/draw.BiLinear` is used for downscaling. It is
+SIMD-accelerated on amd64 via the x/image package's assembly paths.
+
+## Render throughput
+
+| Protocol | Bottleneck |
+|----------|-----------|
+| Kitty | Terminal GPU compositing — rarely the bottleneck |
+| Sixel | Terminal Sixel parser — keep width ≤ 800 px |
+| Half-block | ANSI escape parsing — trivially fast |
+
+## Sandbox overhead
+
+The subprocess spawn adds ~15–30 ms on Linux (mostly `execve` + Go runtime
+startup). For single-image display this is imperceptible. For batch processing
+of many images, disable sandboxing or implement a long-lived worker pool.

@@ -1,0 +1,63 @@
+---
+title: Getting Started
+---
+
+# Getting Started
+
+## Install
+
+```bash
+go get github.com/floatpane/termimage
+```
+
+CGo is required (stb_image decode). You need a C compiler on your PATH. On
+Arch Linux: `pacman -S gcc`. On Debian/Ubuntu: `apt install build-essential`.
+
+## Minimal usage
+
+```go
+package main
+
+import (
+    "os"
+    termimage "github.com/floatpane/termimage"
+)
+
+func main() {
+    // Required: lets sandboxed child processes identify themselves.
+    termimage.MaybeRunWorker()
+
+    err := termimage.Display(os.Stdout, os.Args[1], termimage.Options{})
+    if err != nil {
+        panic(err)
+    }
+}
+```
+
+```bash
+go run main.go ~/Pictures/photo.jpg
+```
+
+## With sandboxing
+
+```go
+termimage.Display(os.Stdout, path, termimage.Options{
+    Sandboxed: true, // decode in Landlock-restricted subprocess
+})
+```
+
+> [!IMPORTANT]
+> `MaybeRunWorker()` must be the first line of `main()` when using
+> `Sandboxed: true`. The library re-execs your binary as the worker; if
+> `MaybeRunWorker()` is called after other init code runs, the child may
+> behave unexpectedly.
+
+## Explicit protocol
+
+```go
+termimage.Display(os.Stdout, path, termimage.Options{
+    Protocol:  termimage.Kitty,
+    MaxWidth:  1920,
+    MaxHeight: 1080,
+})
+```

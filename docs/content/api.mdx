@@ -1,0 +1,51 @@
+---
+title: API Reference
+---
+
+# API Reference
+
+## `termimage.Display`
+
+```go
+func Display(w io.Writer, path string, opts Options) error
+```
+
+Decodes the image at `path` and writes terminal graphics to `w`. Returns the
+first error encountered (file open, decode, or render failure).
+
+## `termimage.Options`
+
+```go
+type Options struct {
+    MaxWidth, MaxHeight int
+    Protocol            Protocol
+    Sandboxed           bool
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `MaxWidth` | terminal pixel width | Max output width in pixels |
+| `MaxHeight` | terminal pixel height × 2 | Max output height in pixels |
+| `Protocol` | `Auto` | `Auto`, `Kitty`, `Sixel`, `HalfBlock` |
+| `Sandboxed` | `false` | Run decode in isolated subprocess |
+
+## `termimage.MaybeRunWorker`
+
+```go
+func MaybeRunWorker()
+```
+
+Must be called at the top of `main()` when using `Sandboxed: true`. Checks for
+the `TERMIMAGE_WORKER=1` env var; if set, applies OS restrictions, decodes the
+image, writes raw RGBA to stdout, and calls `os.Exit(0)`.
+
+## Sub-packages
+
+| Package | Purpose |
+|---------|---------|
+| `decode` | CGo stb_image binding. `decode.File(path)` and `decode.Bytes(data)` |
+| `detect` | Protocol detection. `detect.Best()` |
+| `render` | `render.Kitty`, `render.Sixel`, `render.HalfBlock` |
+| `sandbox` | Subprocess worker. `sandbox.Decode(path)` |
+| `internal/resize` | `resize.Fit(img, maxW, maxH)` — BiLinear scale |

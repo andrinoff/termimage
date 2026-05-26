@@ -1,0 +1,50 @@
+---
+title: Protocols
+---
+
+# Protocols
+
+## Kitty graphics
+
+The [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
+transmits a full PNG payload via APC escape sequences, chunked at 4 096 bytes
+of base64 each. The terminal decodes and GPU-composites the image.
+
+- `q=2` suppresses per-chunk ACK responses, maximizing throughput.
+- Image is always re-encoded as PNG before transmission regardless of source
+  format.
+- Terminals: Kitty, Ghostty, WezTerm ≥0.29.
+
+## Sixel
+
+DEC Sixel encodes the image as bands of 6-pixel-high strips with a palette of
+up to 256 colors. termimage uses **median-cut** color quantization.
+
+```
+\x1bPq          ← enter sixel mode
+#0;2;R;G;B      ← color definitions
+#0<data>$       ← band data + carriage return
+-               ← next band
+\x1b\\           ← exit
+```
+
+> [!WARNING]
+> Sixel throughput is lower than Kitty for large images because the terminal
+> must parse each character rather than receiving a binary blob. Keep
+> `MaxWidth` ≤ 800 for smooth rendering.
+
+## Half-block
+
+Unicode `▀` (U+2580, UPPER HALF BLOCK) encodes two vertically stacked pixels
+per character cell using foreground (top) and background (bottom) 24-bit ANSI
+color escapes.
+
+Works on any terminal with UTF-8 and `COLORTERM=truecolor`. No terminal
+extensions required.
+
+```
+\x1b[38;2;R;G;Bm   ← foreground = top pixel
+\x1b[48;2;R;G;Bm   ← background = bottom pixel
+▀
+\x1b[0m             ← reset
+```

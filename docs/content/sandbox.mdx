@@ -1,0 +1,65 @@
+---
+title: Sandbox Model
+---
+
+# Sandbox Model
+
+## Threat model
+
+Image decoders are historically among the most exploited code paths in
+software. A malformed JPEG or PNG can trigger heap overflows, integer
+overflows, or out-of-bounds reads — all reachable before a single pixel is
+rendered. termimage's sandbox constrains what damage a successful exploit can
+do.
+
+## How it works
+
+When `Sandboxed: true`:
+
+1. The parent process spawns `os.Executable()` as a subprocess with
+   `TERMIMAGE_WORKER=1` and `TERMIMAGE_WORKER_PATH=<path>` in the environment.
+2. The child calls `MaybeRunWorker()`, which detects the env var and takes
+   over.
+3. **Before opening the file**, the child applies OS restrictions.
+4. The child reads, decodes, and writes raw RGBA pixels (`width[4] + height[4]
+   + pixels`) to stdout.
+5. The parent reads the pixel data over the pipe and renders it.
+
+> [!CAUTION]
+> The sandboxed child re-execs **your binary**, not a dedicated helper. If your
+> binary performs side effects during `init()` (network calls, file writes,
+> etc.), those will run in the child before `MaybeRunWorker()` intercepts.
+> Keep `init()` clean or move side effects behind a flag check.
+
+## Landlock (Linux ≥5.13)
+
+Landlock restricts filesystem access to the target file only, read-only:
+
+```go
+landlock.V3.BestEffort().RestrictPaths(landlock.ROFiles(path))
+```
+
+`BestEffort()` silently degrades on older kernels — the binary still runs, just
+without Landlock protection.
+
+## Seccomp (upcoming)
+
+A syscall allowlist via BPF is in progress. The allowlist must accommodate the
+Go runtime scheduler (futex, mmap, brk, etc.) plus stb_image's memory usage
+pattern. Until it ships, only filesystem access is restricted.
+
+> [!NOTE]
+> Even without seccomp, Landlock alone eliminates file-system exfiltration —
+> the most common post-exploit primitive. A compromised decoder cannot read
+> `/etc/passwd`, SSH keys, or any file other than the target image.
+
+## Wire protocol
+
+The parent–child pipe carries a minimal binary protocol:
+
+```
+offset  size  field
+0       4     width  (little-endian uint32)
+4       4     height (little-endian uint32)
+8       w*h*4 RGBA pixels (4 bytes per pixel, row-major)
+```
