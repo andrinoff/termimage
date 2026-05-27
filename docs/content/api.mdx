@@ -27,8 +27,38 @@ Returns the first error encountered (fetch, decode, or render failure).
 func DisplayContext(ctx context.Context, w io.Writer, src string, opts Options) error
 ```
 
-Same as `Display` but takes a `context.Context` for cancellation of HTTP
-fetches and sandboxed decoding.
+Same as `Display` with a `context.Context` for cancellation of HTTP fetches and sandboxed decoding.
+
+## `termimage.DisplayWithSize`
+
+```go
+func DisplayWithSize(w io.Writer, src string, opts Options) (cols, rows int, err error)
+func DisplayContextWithSize(ctx context.Context, w io.Writer, src string, opts Options) (cols, rows int, err error)
+```
+
+Same as `Display` but also returns the terminal character-cell dimensions the rendered image occupies. Use this instead of `Display` + a separate size calculation to avoid decoding the image twice.
+
+| Protocol | `cols` | `rows` |
+|----------|--------|--------|
+| HalfBlock | image pixel width | `ceil(image pixel height / 2)` |
+| Kitty / Sixel | `ceil(pixel width / cell width)` | `ceil(pixel height / cell height)` |
+
+Cell pixel dimensions are read from the terminal via `TIOCGWINSZ`; fallback is 8×16 px/cell.
+
+## `termimage.Clear`
+
+```go
+func Clear(w io.Writer, proto Protocol, rows int) error
+```
+
+Erases a previously rendered image.
+
+| Protocol | Behaviour |
+|----------|-----------|
+| `Kitty` | Sends `\x1b_Ga=d,d=A\x1b\\` (delete all visible placements). `rows` is ignored. |
+| `Sixel`, `HalfBlock` | Moves cursor up `rows` lines then erases to end of screen (`\x1b[{rows}A\x1b[J`). Cursor must be on the last row of the image before calling. |
+
+Pass the `rows` value returned by `DisplayWithSize`.
 
 ## `termimage.Options`
 
@@ -42,10 +72,14 @@ type Options struct {
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `MaxWidth` | terminal pixel width | Max output width in pixels |
-| `MaxHeight` | terminal pixel height × 2 | Max output height in pixels |
+| `MaxWidth` | terminal cols (character cells) | Max pixel width. For HalfBlock: 1 px = 1 character column. |
+| `MaxHeight` | `(terminal rows − 2) × 2` for HalfBlock; `(terminal rows − 2) × cell height px` for Kitty/Sixel | Max pixel height. Minus 2 rows leaves headroom for the shell prompt. |
 | `Protocol` | `Auto` | `Auto`, `Kitty`, `Sixel`, `HalfBlock` |
 | `Sandboxed` | `false` | Run decode in isolated subprocess |
+
+**Aspect ratio:** `MaxWidth` and `MaxHeight` are independent upper bounds. `resize.Fit` computes `scale = min(MaxWidth/srcW, MaxHeight/srcH)` and applies it uniformly — the image fills whichever dimension is the tighter constraint. When only one dimension is set explicitly, the other comes from terminal detection.
+
+**HalfBlock and text layout:** HalfBlock renders using real terminal character cells (`▀` U+2580). Unlike Kitty or Sixel, the output occupies rows × cols cells in the scroll buffer. Cursor save/restore (`\x1b[s` / `\x1b[u`) does **not** undo cell content. TUIs that need pixel-layer rendering should use Kitty or Sixel: call `detect.Best()` first and handle the case where it returns `HalfBlock`.
 
 ## `termimage.MaybeRunWorker`
 
@@ -66,4 +100,4 @@ image, writes raw RGBA to stdout, and calls `os.Exit(0)`.
 | `render` | `render.Kitty`, `render.Sixel`, `render.HalfBlock` |
 | `sandbox` | Subprocess worker. `sandbox.Decode(path)`, `sandbox.DecodeBytes(data)` |
 | `internal/source` | Source resolver. Branches file path / `data:` URI / `http(s)://` URL |
-| `internal/resize` | `resize.Fit(img, maxW, maxH)` — BiLinear scale |
+| `internal/resize` | `resize.Fit(img, maxW, maxH)` — aspect-preserving BiLinear scale |

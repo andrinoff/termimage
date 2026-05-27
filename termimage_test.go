@@ -179,3 +179,118 @@ func TestDisplay_MissingFile(t *testing.T) {
 		t.Error("expected error for missing file")
 	}
 }
+
+func TestDisplayWithSize_HalfBlock(t *testing.T) {
+	// 4×4 image, MaxWidth=4, MaxHeight=4 → no scaling needed.
+	// HalfBlock: cols=4, rows=ceil(4/2)=2.
+	src := image.NewNRGBA(image.Rect(0, 0, 4, 4))
+	var pngBuf bytes.Buffer
+	if err := png.Encode(&pngBuf, src); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "img.png")
+	if err := os.WriteFile(path, pngBuf.Bytes(), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	var out bytes.Buffer
+	cols, rows, err := DisplayWithSize(&out, path, Options{
+		MaxWidth:  4,
+		MaxHeight: 4,
+		Protocol:  HalfBlock,
+	})
+	if err != nil {
+		t.Fatalf("DisplayWithSize: %v", err)
+	}
+	if cols != 4 {
+		t.Errorf("cols = %d, want 4", cols)
+	}
+	if rows != 2 {
+		t.Errorf("rows = %d, want 2", rows)
+	}
+	if out.Len() == 0 {
+		t.Errorf("no output written")
+	}
+}
+
+func TestDisplayWithSize_ScaledHalfBlock(t *testing.T) {
+	// 8×4 image, MaxWidth=4, MaxHeight=8 → width-limited to 4×2.
+	// HalfBlock: cols=4, rows=ceil(2/2)=1.
+	src := image.NewNRGBA(image.Rect(0, 0, 8, 4))
+	var pngBuf bytes.Buffer
+	if err := png.Encode(&pngBuf, src); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "img.png")
+	if err := os.WriteFile(path, pngBuf.Bytes(), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	var out bytes.Buffer
+	cols, rows, err := DisplayWithSize(&out, path, Options{
+		MaxWidth:  4,
+		MaxHeight: 8,
+		Protocol:  HalfBlock,
+	})
+	if err != nil {
+		t.Fatalf("DisplayWithSize: %v", err)
+	}
+	if cols != 4 {
+		t.Errorf("cols = %d, want 4", cols)
+	}
+	if rows != 1 {
+		t.Errorf("rows = %d, want 1", rows)
+	}
+}
+
+func TestClear_Kitty(t *testing.T) {
+	var out bytes.Buffer
+	if err := Clear(&out, Kitty, 0); err != nil {
+		t.Fatalf("Clear Kitty: %v", err)
+	}
+	// Must contain Kitty APC delete-all sequence.
+	if !bytes.Contains(out.Bytes(), []byte("\x1b_Ga=d,d=A\x1b\\")) {
+		t.Errorf("Kitty clear sequence not found in output: %q", out.Bytes())
+	}
+}
+
+func TestClear_HalfBlock(t *testing.T) {
+	var out bytes.Buffer
+	if err := Clear(&out, HalfBlock, 5); err != nil {
+		t.Fatalf("Clear HalfBlock: %v", err)
+	}
+	s := out.String()
+	// Must move cursor up 5 rows and erase to end.
+	if !bytes.Contains(out.Bytes(), []byte("\x1b[5A\x1b[J")) {
+		t.Errorf("HalfBlock clear sequence not found: %q", s)
+	}
+}
+
+func TestClear_HalfBlock_ZeroRows(t *testing.T) {
+	var out bytes.Buffer
+	if err := Clear(&out, HalfBlock, 0); err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("expected no output for rows=0, got %q", out.Bytes())
+	}
+}
+
+func TestPixelsToCells_HalfBlock(t *testing.T) {
+	tests := []struct {
+		pw, ph       int
+		wantC, wantR int
+	}{
+		{4, 4, 4, 2},
+		{4, 5, 4, 3}, // ceil(5/2)=3
+		{4, 6, 4, 3},
+		{1, 1, 1, 1}, // ceil(1/2)=1
+	}
+	for _, tc := range tests {
+		c, r := pixelsToCells(tc.pw, tc.ph, HalfBlock)
+		if c != tc.wantC || r != tc.wantR {
+			t.Errorf("pixelsToCells(%d,%d,HalfBlock) = (%d,%d), want (%d,%d)",
+				tc.pw, tc.ph, c, r, tc.wantC, tc.wantR)
+		}
+	}
+}

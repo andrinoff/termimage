@@ -9,10 +9,20 @@
 //	    termimage.MaybeRunWorker()
 //	    // ... rest of your app
 //	}
+//
+// # HalfBlock and text layout
+//
+// HalfBlock renders using real terminal character cells (▀ U+2580). Unlike
+// Kitty or Sixel, the output occupies rows × cols cells in the terminal scroll
+// buffer. Cursor save/restore (\x1b[s / \x1b[u) does not undo cell content.
+// TUIs that need pixel-layer rendering should use Kitty or Sixel and set
+// AllowHalfBlock: false on Options to prevent fallback.
 package termimage
 
 import (
+	"bufio"
 	"context"
+	"fmt"
 	"image"
 	"io"
 	"os"
@@ -42,10 +52,23 @@ const (
 
 // Options configures image display.
 type Options struct {
-	// MaxWidth / MaxHeight in pixels. 0 = detect from terminal.
+	// MaxWidth / MaxHeight are the pixel bounds for image scaling.
+	//
+	// For HalfBlock, 1 pixel = 1 character column (width) or half a character
+	// row (height), so MaxHeight=100 produces at most 50 character rows.
+	// For Kitty and Sixel, pixels map to physical screen pixels.
+	//
+	// 0 = detect from terminal. Default caps at (terminal_cols, terminal_rows-2)
+	// in character-cell units, leaving two rows of headroom for the shell prompt.
+	// Aspect ratio is always preserved: Fit scales uniformly so neither dimension
+	// exceeds the limit. When only one dimension is set, the other is detected.
 	MaxWidth, MaxHeight int
 
 	// Protocol selects the rendering protocol. Auto detects from $TERM etc.
+	// See detect.Best for detection rules.
+	// TUIs that must avoid HalfBlock (which occupies real text cells — see
+	// package doc) should call detect.Best() first; if it returns HalfBlock,
+	// set Protocol explicitly or return an error before calling Display.
 	Protocol Protocol
 
 	// Sandboxed runs the decoder in a subprocess with Landlock + seccomp.
@@ -54,24 +77,93 @@ type Options struct {
 }
 
 // Display decodes the image at src and writes terminal graphics to w.
-// src may be a local file path, a data: URI, or an http(s):// URL.
+// src may be a local file path, a data: URI (base64), or an http(s):// URL.
 func Display(w io.Writer, src string, opts Options) error {
-	return DisplayContext(context.Background(), w, src, opts)
+	_, _, err := display(context.Background(), w, src, opts)
+	return err
 }
 
 // DisplayContext is Display with caller-supplied context for cancellation of
 // remote fetches and sandboxed decoding.
 func DisplayContext(ctx context.Context, w io.Writer, src string, opts Options) error {
-	proto := opts.Protocol
-	if proto == Auto {
-		proto = detect.Best()
+	_, _, err := display(ctx, w, src, opts)
+	return err
+}
+
+// DisplayWithSize renders the image and returns the terminal character-cell
+// dimensions (cols, rows) it occupies. Use this instead of Display + Dims to
+// avoid decoding the image twice.
+//
+// For HalfBlock, cols = image pixel width, rows = ceil(image pixel height / 2).
+// For Kitty and Sixel, cols and rows are derived from the cell pixel size
+// reported by the terminal (TIOCGWINSZ), falling back to 8×16 px per cell.
+func DisplayWithSize(w io.Writer, src string, opts Options) (cols, rows int, err error) {
+	return display(context.Background(), w, src, opts)
+}
+
+// DisplayContextWithSize is DisplayWithSize with caller-supplied context.
+func DisplayContextWithSize(ctx context.Context, w io.Writer, src string, opts Options) (cols, rows int, err error) {
+	return display(ctx, w, src, opts)
+}
+
+// Clear erases a previously rendered image.
+//
+// For Kitty, rows is ignored — all visible image placements are deleted via the
+// Kitty graphics protocol delete command. Call immediately after the image is
+// no longer needed; no cursor positioning is required.
+//
+// For Sixel and HalfBlock, the caller must position the cursor on the last row
+// of the image before calling Clear. rows should be the value returned by
+// DisplayWithSize. Clear moves the cursor up by rows lines then erases to end
+// of screen (\x1b[{rows}A\x1b[J).
+func Clear(w io.Writer, proto Protocol, rows int) error {
+	bw := bufio.NewWriterSize(w, 32)
+	switch proto {
+	case Kitty:
+		if _, err := fmt.Fprint(bw, "\x1b_Ga=d,d=A\x1b\\"); err != nil {
+			return err
+		}
+	default:
+		if rows <= 0 {
+			return nil
+		}
+		if _, err := fmt.Fprintf(bw, "\x1b[%dA\x1b[J", rows); err != nil {
+			return err
+		}
+	}
+	return bw.Flush()
+}
+
+// display is the shared implementation for all Display* variants.
+func display(ctx context.Context, w io.Writer, src string, opts Options) (cols, rows int, err error) {
+	proto, err := resolveProto(opts)
+	if err != nil {
+		return 0, 0, err
 	}
 
+	img, err := loadScaled(ctx, src, opts, proto)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	cols, rows = pixelsToCells(img.Bounds().Dx(), img.Bounds().Dy(), proto)
+	return cols, rows, renderWith(w, img, proto)
+}
+
+func resolveProto(opts Options) (Protocol, error) {
+	if opts.Protocol != Auto {
+		return opts.Protocol, nil
+	}
+	return detect.Best(), nil
+}
+
+// loadScaled resolves src, decodes, and scales to effectiveDimensions.
+func loadScaled(ctx context.Context, src string, opts Options, proto Protocol) (*image.NRGBA, error) {
 	maxW, maxH := effectiveDimensions(opts, proto)
 
 	resolved, err := source.Resolve(ctx, src)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	var img *image.NRGBA
@@ -90,11 +182,10 @@ func DisplayContext(ctx context.Context, w io.Writer, src string, opts Options) 
 		}
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	scaled := resize.Fit(img, maxW, maxH)
-	return renderWith(w, scaled, proto)
+	return resize.Fit(img, maxW, maxH), nil
 }
 
 func renderWith(w io.Writer, img *image.NRGBA, proto Protocol) error {
@@ -108,22 +199,34 @@ func renderWith(w io.Writer, img *image.NRGBA, proto Protocol) error {
 	}
 }
 
-// effectiveDimensions returns the pixel bounds for image scaling.
-// For HalfBlock, terminal character dimensions drive the limit (1 char = 1px
-// wide, 2px tall) because the renderer emits one character per pixel column.
-// For Kitty/Sixel, the terminal's actual pixel viewport is used.
+// effectiveDimensions returns pixel bounds for image scaling.
+//
+// Both protocols share the same calculation: character grid dimensions drive
+// the limit, converted to pixels via cell size. Two rows are reserved as
+// headroom for the shell prompt / surrounding content.
+//
+// For HalfBlock: 1 col = 1 px wide, 1 row = 2 px tall.
+// For Kitty/Sixel: multiply by cell pixel dimensions from TIOCGWINSZ.
 func effectiveDimensions(opts Options, proto Protocol) (int, int) {
 	w, h := opts.MaxWidth, opts.MaxHeight
 	if w > 0 && h > 0 {
 		return w, h
 	}
 
+	cols, rows := detectTermChars()
+	cw, ch := detectCellPixels()
+
+	const headroom = 2
+	effectiveRows := rows - headroom
+	if effectiveRows < 1 {
+		effectiveRows = 1
+	}
+
 	var tw, th int
 	if proto == HalfBlock {
-		cols, rows := detectTermChars()
-		tw, th = cols, rows*2
+		tw, th = cols, effectiveRows*2
 	} else {
-		tw, th = detectTermPixels()
+		tw, th = cols*cw, effectiveRows*ch
 	}
 
 	if w <= 0 {
@@ -135,13 +238,14 @@ func effectiveDimensions(opts Options, proto Protocol) (int, int) {
 	return w, h
 }
 
-func detectTermPixels() (int, int) {
-	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		return 1920, 1080
+// pixelsToCells converts scaled image pixel dimensions to terminal character
+// cell dimensions (cols, rows) for the given protocol.
+func pixelsToCells(pw, ph int, proto Protocol) (cols, rows int) {
+	if proto == HalfBlock {
+		return pw, (ph + 1) / 2
 	}
-	defer func() { _ = f.Close() }()
-	return termPixels(f)
+	cw, ch := detectCellPixels()
+	return (pw + cw - 1) / cw, (ph + ch - 1) / ch
 }
 
 func detectTermChars() (int, int) {
@@ -151,4 +255,23 @@ func detectTermChars() (int, int) {
 	}
 	defer func() { _ = f.Close() }()
 	return termChars(f)
+}
+
+func detectCellPixels() (int, int) {
+	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return 8, 16
+	}
+	defer func() { _ = f.Close() }()
+	return cellPixels(f)
+}
+
+// detectTermPixels is retained for callers that need raw screen pixel dimensions.
+func detectTermPixels() (int, int) {
+	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return 1920, 1080
+	}
+	defer func() { _ = f.Close() }()
+	return termPixels(f)
 }

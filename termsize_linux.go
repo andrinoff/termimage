@@ -29,3 +29,12 @@ func termChars(f *os.File) (int, int) {
 	}
 	return int(ws.Col), int(ws.Row)
 }
+
+// cellPixels returns the pixel dimensions of a single terminal character cell.
+func cellPixels(f *os.File) (cellW, cellH int) {
+	ws, err := unix.IoctlGetWinsize(int(f.Fd()), unix.TIOCGWINSZ)
+	if err != nil || ws.Col == 0 || ws.Row == 0 || ws.Xpixel == 0 || ws.Ypixel == 0 {
+		return 8, 16
+	}
+	return int(ws.Xpixel) / int(ws.Col), int(ws.Ypixel) / int(ws.Row)
+}
