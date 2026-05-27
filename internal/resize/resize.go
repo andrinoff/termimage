@@ -8,7 +8,9 @@ import (
 )
 
 // Fit scales src to fit within maxW×maxH while preserving aspect ratio.
-// Returns src unchanged if it already fits.
+// The scale factor is min(maxW/srcW, maxH/srcH), so both dimensions are
+// satisfied simultaneously. Returns src unchanged if it already fits within
+// the bounds.
 func Fit(src *image.NRGBA, maxW, maxH int) *image.NRGBA {
 	b := src.Bounds()
 	sw, sh := b.Dx(), b.Dy()
