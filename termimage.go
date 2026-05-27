@@ -136,10 +136,7 @@ func Clear(w io.Writer, proto Protocol, rows int) error {
 
 // display is the shared implementation for all Display* variants.
 func display(ctx context.Context, w io.Writer, src string, opts Options) (cols, rows int, err error) {
-	proto, err := resolveProto(opts)
-	if err != nil {
-		return 0, 0, err
-	}
+	proto := resolveProto(opts)
 
 	img, err := loadScaled(ctx, src, opts, proto)
 	if err != nil {
@@ -150,11 +147,11 @@ func display(ctx context.Context, w io.Writer, src string, opts Options) (cols, 
 	return cols, rows, renderWith(w, img, proto)
 }
 
-func resolveProto(opts Options) (Protocol, error) {
+func resolveProto(opts Options) Protocol {
 	if opts.Protocol != Auto {
-		return opts.Protocol, nil
+		return opts.Protocol
 	}
-	return detect.Best(), nil
+	return detect.Best()
 }
 
 // loadScaled resolves src, decodes, and scales to effectiveDimensions.
@@ -264,14 +261,4 @@ func detectCellPixels() (int, int) {
 	}
 	defer func() { _ = f.Close() }()
 	return cellPixels(f)
-}
-
-// detectTermPixels is retained for callers that need raw screen pixel dimensions.
-func detectTermPixels() (int, int) {
-	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		return 1920, 1080
-	}
-	defer func() { _ = f.Close() }()
-	return termPixels(f)
 }
