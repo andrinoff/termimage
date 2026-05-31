@@ -8,7 +8,11 @@ export const metadata: Metadata = {
 		"Sandboxed terminal image rendering for Go. Kitty, Sixel, and half-block. Fast CGo decode via stb_image.",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+	children,
+}: {
+	children: React.ReactNode;
+}) {
 	return (
 		<html lang="en">
 			<body>
@@ -25,3 +29,5 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 		</html>
 	);
 }
+
+export const viewport = { width: "device-width", initialScale: 1 };
